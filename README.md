@@ -103,7 +103,15 @@ self.addEventListener('activate', function(event) { /* 激活后... */ });
 self.addEventListener('fetch', function(event) { /* 请求后... */ });
 ```
 
-基本上，目前Service Worker的所有应用都是基于上面3个事件的，demo就是这样实现
+基本上，目前Service Worker的所有应用都是基于上面3个事件的，demo就是这样实现。
+
+下图展示了 Service Worker 的完整生命周期：
+
+![img](https://mdn.mozillademos.org/files/12636/sw-lifecycle.png)
+
+下图展示了 service worker 所有支持的事件：
+
+![img](https://mdn.mozillademos.org/files/12632/sw-events.png)
 
 #### Service Worker的兼容性
 
@@ -132,14 +140,14 @@ cache并不直接缓存字符串（想想localstorage），而是直接缓存资
 `cache.add(Request|url)` 并不是单纯的add，因为传入的是request或者url，**在cache.add内部会自动去调用fetch取回request的请求结果**，然后才是把response存入cache
 
 `cache.addAll`类似，通常在`sw` install的时候用`cache.addAll`把所有需要缓存的文件都请求一遍
-
+`cache.put(Request, Response)` 这个相当于`cache.add`的第二步，即fetch到response后存入cache
 `cache.delete(Request|url)` 删除缓存
 
 参考fetch介绍：[Fetch][https://github.github.io/fetch/]
 
-## 借助Service Worker和cacheStorage离线开发的固定套路
+## Service Worker 的使用
 
-1. 页面上注册一个Service Worker，例如：
+1. 页面上注册一个Service Worker，如：
 
    ```
    if ('serviceWorker' in navigator) {
@@ -147,9 +155,12 @@ cache并不直接缓存字符串（想想localstorage），而是直接缓存资
    }
    ```
 
-2. sw-demo-cache.js 这个JS中复制如下代码：
+2. 注册sw-demo-cache.js， 在这个JS中完成sw的安装和使用：
+
+   1) install事件定义一个callback，并决定想要缓存的文件：
 
    ```
+
    var VERSION = 'v1';
    var urlCacheArr = [
        './index.html',
@@ -157,7 +168,7 @@ cache并不直接缓存字符串（想想localstorage），而是直接缓存资
        './js/jquery.min.js',
        './img/star.jpg'
    ];
-   // 注册缓存
+   // 缓存注入
    self.addEventListener('install', function(event) {
      event.waitUntil(
        caches.open(VERSION).then(function(cache) {
@@ -165,7 +176,16 @@ cache并不直接缓存字符串（想想localstorage），而是直接缓存资
        })
      );
    });
+   ```
 
+
+​     注意：`在事件上接了一个`[`ExtendableEvent.waitUntil()`](https://developer.mozilla.org/zh-CN/docs/Web/API/ExtendableEvent/waitUntil)  方法——这会确保Service Worker 不会在 `waitUntil()` 里面的代码执行完毕之前安装完成。
+
+​             在 `waitUntil()内，我们使用了` [`caches.open()`](https://developer.mozilla.org/en-US/docs/Web/API/CacheStorage/open) 方法来创建了一个叫做 v1 的新的缓存，将会是我们的站点资源缓存的第一个版本。它返回了一个创建缓存的 promise，当它 resolved的时候，我们接着会调用在创建的缓存示例上的一个方法  `addAll()，这个方法的参数是一个由一组相对于 origin 的 URL 组成的数组，这些 URL 就是你想缓存的资源的列表。`
+
+​      2)  当安装成功完成之后， service worker 就会激活。当版本发生变化，下一步是激活。当 service worker 安装完成后，会接收到一个激活事件(activate event)。 `onactivate `主要用途是清理先前版本的service worker 脚本中使用的资源。
+
+  ```
    // 缓存更新, 删除旧缓存
    self.addEventListener('activate', function(event) {
      event.waitUntil(
@@ -181,25 +201,34 @@ cache并不直接缓存字符串（想想localstorage），而是直接缓存资
        })
      );
    });
+  ```
 
-   // 捕获请求并返回缓存数据
+
+   3)  每次任何被 service worker 控制的资源被请求到时，都会触发 fetch 事件，这些资源包括了指定的 scope 内的文档，和这些文档内引用的其他任何资源（比如 index.html 发起了一个跨域的请求来嵌入一个图片，这个也会通过 service worker 。）  
+
+  ```
+  // 捕获请求并返回缓存数据
    self.addEventListener('fetch', function(event) {
-     event.respondWith(caches.match(event.request).catch(function() {
-       return fetch(event.request);
-     }).then(function(response) {
-       caches.open(VERSION).then(function(cache) {
-         cache.put(event.request, response);
-       });
-       return response.clone();
-     }).catch(function() {
-       return caches.match('./img/star.jpg');
-     }));
+     event.respondWith(
+      caches.match(event.request).catch(function() {
+        return fetch(event.request).then(function(response) {
+          return caches.open(VERSION).then(function(cache) {
+            cache.put(event.request, response.clone());
+            return response;
+          });  
+        });
+      }).catch(function() {
+        return caches.match('./img/star.jpg');
+      })
+    );
    });
-   ```
+  ```
+
+注意：caches.match(event.request) 允许我们对网络请求的资源和 cache 里可获取的资源进行匹配，查看是否缓存中有相应的资源。
 
 3. 把`cache.addAll()`方法中缓存文件数组换成你希望缓存的文件数组。
 
-通过以上三步，可以实现支持Service Worker缓存，甚至离线也可以自如访问，支持各种网站，PC和Mobile通杀，不支持的浏览器没有任何影响，支持的浏览器天然离线支持，想要更新缓存，`v1`换成`v2`就可以
+通过以上三大步，可以实现支持Service Worker缓存，甚至离线也可以自如访问，支持各种网站，PC和Mobile通杀，不支持的浏览器没有任何影响，支持的浏览器天然离线支持，想要更新缓存，`v1`换成`v2`就可以
 
 更多资料参考：
 
